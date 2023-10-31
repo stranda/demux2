@@ -1,0 +1,121 @@
+#!/bin/bash
+
+
+#set up the directories and clean old demux
+work=.
+fastq=`pwd`/fastq
+
+rm -fr $fastq
+mkdir $fastq
+
+# Check if an input file is provided
+if [ "$#" -ne 3 ]; then
+    echo "Usage: $0 <read1 gzipped fastq> <read2 gzipped fastq> <barcode.csv>"
+    exit 1
+fi
+
+input_file1="$1"
+input_file2="$2"
+input_file3="$3"
+
+# Check if the input file exists
+if [ ! -f "$input_file1" ]; then
+    echo "Error: $input_file1 does not exist."
+    exit 1
+fi
+# Check if the input file exists
+if [ ! -f "$input_file2" ]; then
+    echo "Error: $input_file2 does not exist."
+    exit 1
+fi
+# Check if the input file exists
+if [ ! -f "$input_file3" ]; then
+    echo "Error: $input_file3 does not exist."
+    exit 1
+fi
+
+#####
+### this section creates the awk script that is based on the barcodes.csv input (demux2.awk)
+####
+
+# Start the awk script with the initialization block
+awk_script='BEGIN { RS = "\n"; FS = "\f" }'
+awk_script+=$'\n{ sample="" '
+
+# Read the three-column input file and construct the conditional checks
+while IFS=$',' read -r r1 r2 sample; do
+    awk_script+=$'\nif ((index($2,"'"$r1"'")==1) && (index($6,"'"$r2"'")==1)) {'
+    awk_script+=$'\n    sample="'"$sample"'"'
+    awk_script+=$'\n    regex1="'^"$r1"'"'
+    awk_script+=$'\n    regex2="'^"$r2"'"'
+    awk_script+=$'\n    sequenceR1=gensub(regex1,"",1,$2)'
+    awk_script+=$'\n    sequenceR2=gensub(regex2,"",1,$6)'
+    awk_script+=$'\n} else '
+done < "$input_file3"
+
+# Add the "nomatch" condition and the rest of the awk script
+awk_script+=$'
+{
+    sample = "nomatch"
+    sequenceR1 = $2
+    sequenceR2 = $6
+}
+
+strt = length($4) - length(sequenceR1)
+qualR1 = substr($4,strt+1)
+
+print $1  >> "fastq/" sample "_R1.fastq"
+print sequenceR1 >> "fastq/" sample "_R1.fastq"
+print $3  >> "fastq/" sample "_R1.fastq"
+print qualR1 >> "fastq/" sample "_R1.fastq"
+
+strt = length($6) - length(sequenceR2)
+qualR2 = substr($8,strt+1)
+tabfree=gensub("\t","",1,$5)
+
+print tabfree  >> "fastq/" sample "_R2.fastq"
+print sequenceR2 >> "fastq/" sample "_R2.fastq"
+print $7  >> "fastq/" sample "_R2.fastq"
+print qualR2 >> "fastq/" sample "_R2.fastq"
+
+}
+'
+
+# Print the constructed awk script
+echo "$awk_script" > demux2.awk
+
+echo "awk script created"
+#############  finished creating the awk script
+date
+############# preparing the input files
+echo "starting to prepare input files"
+
+zcat $input_file1 | sed 's/^@/QYZ/'|tr '\n' '\f'|tr 'QZ' '\n@'|tr -d 'Y' > ${work}/r1.flat &
+zcat $input_file2 | sed 's/^@/QYZ/'|tr '\n' '\f'|tr 'QZ' '\n@'|tr -d 'Y' > ${work}/r2.flat &
+wait %1 %2
+
+echo "input files created"
+############## input files created
+date
+############## run the demux now
+echo "starting demux"
+paste  ${work}/r1.flat ${work}/r2.flat | awk -f demux2.awk
+
+echo "demux finished"
+############## demux finished
+date
+############## compress outputs
+for file in fastq/*.fastq; do
+    echo "compressing $file"
+    gzip "$file"
+done
+
+############## done compressing
+date
+############## cleanup
+rm demux2.awk
+rm ${work}/r1.flat ${work}/r2.flat
+
+echo "done"
+
+date
